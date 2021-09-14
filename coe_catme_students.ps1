@@ -21,7 +21,7 @@ else
     $blnkConfig = new-object PSObject -Property (@{ AD_Domain="DC=my,DC=college,DC=edu"; 
                                                     IAM_Key=""; 
                                                     IAM_URL="https://iamsite.edu";
-                                                    COE_Dept_Codes=@("000000","000001","000002");
+                                                    Org_Code="";
                                                   });
 
     $blnkConfig | ConvertTo-Json | Out-File .\config.json;

@@ -1,7 +1,7 @@
 <#
     Title: coe_catme_students.ps1
     Authors: Dean Bunn and Steve Pigg
-    Last Edit: 2021-09-13
+    Last Edit: 2021-09-14
 #>
 
 #Var for Config Settings
@@ -35,6 +35,9 @@ $htInstructors = @{};
 
 #Array for Instructors
 $arrInstructors = @();
+
+#Array for Reporting
+$arrReport = @();
 
 #Load CATME Students File
 $csvCATMEStudents = Import-Csv -Path .\catme_students.csv;
@@ -112,7 +115,7 @@ foreach($key in $htInstructors.Keys)
     {
 
         #Custom Object for Instructor
-        $cstInstr = new-object PSObject -Property (@{ user_id=""; iam_id=""; display_name=""; email=""; dept_codes=@(); prime_dept=""; coe="";});
+        $cstInstr = new-object PSObject -Property (@{ user_id=""; iam_id=""; display_name=""; email=""; prime_dept=""; coe="No";});
 
         #Check for IAM ID
         if($ADSrchResult.Properties["extensionAttribute7"].Count -gt 0)
@@ -150,12 +153,113 @@ foreach($cstInstcr in $arrInstructors)
     #Var for IAM URL 
     [string]$iamURL = $cnfgSettings.IAM_URL + $cstInstcr.iam_id + "?key=" + $cnfgSettings.IAM_Key + "&v=1.0";
     
+    #Pull Instructor Payroll Information from IAM via API Call
     $irmInstcr = Invoke-RestMethod -ContentType "application/json" -Uri $iamURL;
 
-    foreach($ppsAsgn in $irmInstcr.responseData.results)
+    #Check for Response Data and Results
+    if($irmInstcr.responseData -ne $null -and $irmInstcr.responseData.results -ne $null -and $irmInstcr.responseData.results.Count -gt 0)
     {
-        $ppsAsgn;
+        
+        #Set Primary Dept 
+        $cstInstcr.prime_dept = $irmInstcr.responseData.results[0].apptDeptDisplayName;
+
+
+        foreach($ppsAsgn in $irmInstcr.responseData.results)
+        {
+
+            #Check Org 
+            if($ppsAsgn.apptBouOrgOId -eq $cnfgSettings.Org_Code)
+            {
+                $cstInstcr.coe = "Yes";
+            }
+
+        }#End of ReponseData.Results Foreach
+
     }
 
 }#End of $arrInstructors IAM Lookup Foreach 
 
+#Go Back Through CSV File and Parse Report File
+foreach($rwCATME in $csvCATMEStudents)
+{
+
+    #Custom Object for Report Row
+    $cstRptRow = new-object PSObject -Property (@{ email=""; person_id=""; first_name=""; last_name=""; instructors=""; instructor_coe="No"; instructors_primary_dept=""; });
+    
+    #Pull Over Reporting 
+    $cstRptRow.email = $rwCATME.email;
+    $cstRptRow.person_id = $rwCATME.person_id;
+    $cstRptRow.first_name = $rwCATME.first_name;
+    $cstRptRow.last_name = $rwCATME.last_name;
+
+    #Var for Row Instructors Array
+    $arrRwInstrtors = @();
+
+    #Parse Instructors Again
+    if([string]::IsNullOrEmpty($rwCATME.instructors) -eq $false)
+    {
+        
+        #Load Raw Instructors Information
+        $cstRptRow.instructors = $rwCATME.instructors;
+
+        #Check for Numerous Instructors
+        if($rwCATME.instructors.ToString().Contains(",") -eq $true)
+        {
+
+            #Split Up Multiple Instructor Information By Comma
+            foreach($insrEmlAddr in $rwCATME.instructors.ToString().Split(","))
+            {
+                $arrRwInstrtors += $insrEmlAddr.ToString().ToLower().Trim();
+            }
+           
+        }
+        else
+        {
+            $arrRwInstrtors += $rwCATME.instructors.ToString().ToLower().Trim().Replace(",","");
+        }
+
+    }#End of Parsing Instructors Second Time
+    
+
+    #Determine If COE and Instructor Department Values
+    foreach($rwInstrcr in $arrRwInstrtors)
+    {
+
+        foreach($crsInstr in $arrInstructors)
+        {
+            
+            #Match Instructor By Email Value
+            if($crsInstr.email.ToLower() -eq $rwInstrcr)
+            {
+
+                #Check For COE Status
+                if($crsInstr.coe -eq "Yes")
+                {
+                    $cstRptRow.instructor_coe = "Yes";
+                }
+
+                if($cstRptRow.instructors_primary_dept.ToString().Contains($crsInstr.prime_dept) -eq $false)
+                {
+                    $cstRptRow.instructors_primary_dept += $crsInstr.prime_dept + ",";
+                }
+
+            }#End of Email Value Match Check
+
+        }#End of $arrInstructors Foreach
+
+    }#End of $arrRwInstrtors
+
+    #Strip Off Trailing Comma on Instructor Primary Dept
+    if([string]::IsNullOrEmpty($cstRptRow.instructors_primary_dept) -eq $false)
+    {
+        $cstRptRow.instructors_primary_dept = $cstRptRow.instructors_primary_dept.ToString().TrimEnd(',');
+    }
+
+    #Add To Report Array
+    $arrReport += $cstRptRow;
+}
+
+
+#Export CSV Report File
+$rptFileName = "UCD_CATME_Students_Report_" + (Get-Date -Format d).ToString().Replace("/","-") + ".csv";
+$arrReport | Select-Object "email","person_id","first_name","last_name","instructors","instructor_coe","instructors_primary_dept" | Export-CSV $rptFileName -NoTypeInformation;
